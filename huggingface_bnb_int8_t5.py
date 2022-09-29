@@ -19,7 +19,7 @@ Install the dependencies below first!
 """
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import torch
-"""Implementation of different utility functions for adapter layers."""
+import pdb
 from dataclasses import dataclass
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,6 +30,7 @@ class LoraLinear8bit(Linear8bitLt):
     def __init__(
         self,
         weight,
+        state,
         bias=None,
         adapter_dim=0,
         parallel=False,
@@ -39,10 +40,12 @@ class LoraLinear8bit(Linear8bitLt):
         # init_svd=False,
     ):
         self.out_features, self.in_features = weight.shape
-        bias_used = bias is None
+        bias_used = bias is not None
+
         super().__init__(self.in_features, self.out_features, bias=bias_used)
 
-        self.register_buffer("weight", weight.requires_grad_(False))
+        self.weight = weight
+        self.state = state
         self.bias = bias
         self.parallel = parallel
         # self.down_scale = down_scale
@@ -50,8 +53,8 @@ class LoraLinear8bit(Linear8bitLt):
         # self.init_svd = init_svd
 
         if adapter_dim > 0:
-            self.adapter_down = nn.Linear(self.in_features, adapter_dim, bias=False)
-            self.adapter_up = nn.Linear(adapter_dim, self.out_features, bias=False)
+            self.adapter_down = nn.Linear(self.in_features, adapter_dim, bias=False).half()
+            self.adapter_up = nn.Linear(adapter_dim, self.out_features, bias=False).half()
 
             self.adapter_dim = adapter_dim
             if adapter_bias:
@@ -76,6 +79,7 @@ class LoraLinear8bit(Linear8bitLt):
             self.adapter_bias2 = None
 
     def forward(self, input):
+        # pdb.set_trace()
         if self.adapter_before is not None:
             input = input * (1.0 + 128.0**0.5 * self.adapter_before)
         out = super().forward(input)
@@ -102,7 +106,7 @@ class LoraLinear8bit(Linear8bitLt):
 
     @classmethod
     def from_linear(cls, linear: Linear8bitLt, **kwargs) -> "LoraLinear8bit":
-        return cls(linear.weight, linear.bias, **kwargs)
+        return cls(linear.weight, linear.state, linear.bias, **kwargs)
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.in_features}, {self.out_features})"
@@ -183,5 +187,6 @@ def test_generate(model):
 
 test_generate(model_8bit)
 lorafy_(model_8bit, config)
+model_8bit.to("cuda:0")
 test_generate(model_8bit)
 
