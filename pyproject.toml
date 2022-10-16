@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transparent"
+description = "Logit lens + 8bit models + ..."
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["nlp", "language-models", "explainable-ai"]
+license = {text = "MIT License"}
+dependencies = [
+    "datasets",
+    "torch",
+    "transformers",
+    "pydrive",
+    "einops",
+    "scipy",
+]
+version = "0.0.1"
+
+[tool.setuptools]
+packages = ["transparent"]
