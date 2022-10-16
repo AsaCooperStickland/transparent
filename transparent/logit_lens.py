@@ -1,6 +1,5 @@
 import torch
 from torch.nn import functional as F
-from tabulate import tabulate
 from tqdm import tqdm, trange
 from copy import deepcopy
 import numpy as np
@@ -65,7 +64,7 @@ def top_tokens(
     # if extra_values is not None:
     #     v = torch.cat([v, extra_values])
     # print(v)
-    T = 0.01
+    T = 0.1
     probs = F.softmax(v / T, dim=-1)
     # print(probs)
     # print(probs.sum())
