@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import numpy as np
 from torch.distributions import Categorical
 from torch.utils.data.dataloader import DataLoader
+from argparse import Namespace
 
 from transparent.transformer import Transformer
 
@@ -19,8 +20,9 @@ def cross_entropy_high_precision(logits: torch.Tensor, labels: torch.Tensor) -> 
     return loss
 
 
-def train_epoch(model, train_loader, scheduler, optimizer, train_sparsity,
-                train_entropy, train_losses, args):
+def train_epoch(model: Transformer, train_loader: DataLoader, scheduler, optimizer, train_sparsity: list,
+                train_entropy: list, train_losses: list, args: Namespace) -> None:
+    '''Train on dataset in `train_loader` for one epoch.'''
     for batch_idx, batch in enumerate(train_loader):
         # print(batch['input_ids'][0].shape)
         # print(batch['input_ids'][0])
@@ -71,7 +73,9 @@ def train_epoch(model, train_loader, scheduler, optimizer, train_sparsity,
         optimizer.zero_grad()
 
 
-def test_epoch(model: Transformer, test_loader: DataLoader, args, get_stats: bool=True) -> float:
+def test_epoch(model: Transformer, test_loader: DataLoader, args: Namespace, get_stats: bool=True) -> tuple:
+    '''Test on dataset in `test_loader` for one epoch. Optionally collect stats
+    about model internals.'''
     loss_store = []
     entropy_store = []
     sparse_store = []
@@ -94,7 +98,7 @@ def test_epoch(model: Transformer, test_loader: DataLoader, args, get_stats: boo
         return (sum(loss_store) / n, sum(entropy_store) / n,
                 sum(sparse_store) / n)
     else:
-        return sum(loss_store) / n
+        return (sum(loss_store) / n,)
 
 
 def get_mean(torch_list: list) -> float:

@@ -81,7 +81,7 @@ def main():
         for learning_rate in [0.0001, 0.001]:
             torch.manual_seed(seed) # use same model init for every lr etc.
             for run_id in range(2):
-                drive_path = drive_root / f'lm_l1pen_{args.l1_norm_penalty}_fpen{args.fisher_penalty_weight}_{args.act_type}_seed{seed}_lr_{learning_rate}_wd_{weight_decay}_{run_id}'
+                drive_path = drive_root / f'lm_l1pen_{args.l1_norm_penalty}_fpen{args.fisher_penalty_weight}_{args.act_device}_seed{seed}_lr_{learning_rate}_wd_{weight_decay}_{run_id}'
                 try:
                     os.mkdir(drive_path)
                 except FileExistsError:
