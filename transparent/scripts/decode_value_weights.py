@@ -7,6 +7,7 @@ import numpy as np
 from pathlib import Path
 from copy import deepcopy
 from tabulate import tabulate
+from collections import defaultdict
 
 from transparent.transformer import Transformer
 from transparent.data_utils import get_tokenized_wikitext
@@ -34,6 +35,7 @@ class ModelDecoder:
 
 
     def load_and_evaluate_model(self):
+        '''Load models and decode their weights into embedding space'''
         use_ln = False
         saved_models = []
         entropy = []
@@ -74,81 +76,89 @@ class ModelDecoder:
 
 
     def decode_model_weights(self, model):
-            emb = model.get_output_embeddings().data.detach()
-                
-            K = torch.cat(
-                [
-                    model.get_parameter(f"blocks.{j}.mlp.W_out").T
-                    for j in range(self.num_layers)
-                ]
-            ).detach()
-            # V = torch.cat(
-            #     [
-            #         model.get_parameter(f"transformer.h.{j}.mlp.c_proj.weight")
-            #         for j in range(num_layers)
-            #     ]
-            # ).detach()
-            #
-            # W_Q, W_K, W_V = (
-            #     torch.cat(
-            #         [
-            #             model.get_parameter(f"transformer.h.{j}.attn.c_attn.weight")
-            #             for j in range(num_layers)
-            #         ]
-            #     )
-            #     .detach()
-            #     .chunk(3, dim=-1)
-            # )
-            # W_O = torch.cat(
-            #     [
-            #         model.get_parameter(f"transformer.h.{j}.attn.c_proj.weight")
-            # for j in range(num_layers)
-            # ]
-            # ).detach()
+        emb = model.get_output_embeddings().data.detach()
             
-            K_heads = K.reshape(self.num_layers, -1, self.d_model)
-            # V_heads = V.reshape(num_layers, -1, self.d_model)
-            # d_int = K_heads.shape[1]
-            #
-            # W_V_heads = W_V.reshape(num_layers, self.d_model, num_heads, head_size).permute(
-            #     0, 2, 1, 3
-            # )
-            # W_O_heads = W_O.reshape(num_layers, num_heads, head_size, self.d_model)
-            # W_Q_heads = W_Q.reshape(num_layers, self.d_model, num_heads, head_size).permute(
-            #     0, 2, 1, 3
-            # )
-            # W_K_heads = W_K.reshape(num_layers, self.d_model, num_heads, head_size).permute(
-            #     0, 2, 1, 3
-            # )
-            #
-            # i1, i2 = 21, 7
-            # print(i1, i2)
-            print(K_heads.shape)
-            keys_store = []
-            layers, keys, _ = K_heads.shape
-            batch_size = 100
-            steps = keys // batch_size
-            for layer in range(layers):
-                print(f"Analyzing layer {layer}")
-                per_layer_store = []
-                for i in range(steps):
-                    tokens, values, prob_values, entropy = top_tokens(
-                        (K_heads[layer, i * batch_size : min((i + 1) * batch_size, keys)]) @ emb,
-                        tokenizer=self.tokenizer,
-                        k=10,
-                        with_extra_info=True,
-                    )
-                    # print(tokens.shape)
-                    num_examples, _ = tokens.shape
-                    for j in range(num_examples):
-                        t, v, p, e = tokens[j, :], values[j, :], prob_values[j, :], entropy[j]
-                        per_layer_store.append((t, v, p, e))
-                        neuron_tokens = convert_to_tokens(t, self.tokenizer)
-                        neuron_tokens = [(token, prob) for token, prob in zip(neuron_tokens, p)]
-                        if e < 1e-4:
-                            print(f"Analyzing layer {layer} and neuron {batch_size*i+j} with entropy {e}")
-                            print(tabulate([neuron_tokens]))
-                keys_store.append(per_layer_store)
+        K = torch.cat(
+            [
+                model.get_parameter(f"blocks.{j}.mlp.W_out").T
+                for j in range(self.num_layers)
+            ]
+        ).detach()
+        # V = torch.cat(
+        #     [
+        #         model.get_parameter(f"transformer.h.{j}.mlp.c_proj.weight")
+        #         for j in range(num_layers)
+        #     ]
+        # ).detach()
+        #
+        # W_Q, W_K, W_V = (
+        #     torch.cat(
+        #         [
+        #             model.get_parameter(f"transformer.h.{j}.attn.c_attn.weight")
+        #             for j in range(num_layers)
+        #         ]
+        #     )
+        #     .detach()
+        #     .chunk(3, dim=-1)
+        # )
+        # W_O = torch.cat(
+        #     [
+        #         model.get_parameter(f"transformer.h.{j}.attn.c_proj.weight")
+        # for j in range(num_layers)
+        # ]
+        # ).detach()
+        
+        K_heads = K.reshape(self.num_layers, -1, self.d_model)
+        # V_heads = V.reshape(num_layers, -1, self.d_model)
+        # d_int = K_heads.shape[1]
+        #
+        # W_V_heads = W_V.reshape(num_layers, self.d_model, num_heads, head_size).permute(
+        #     0, 2, 1, 3
+        # )
+        # W_O_heads = W_O.reshape(num_layers, num_heads, head_size, self.d_model)
+        # W_Q_heads = W_Q.reshape(num_layers, self.d_model, num_heads, head_size).permute(
+        #     0, 2, 1, 3
+        # )
+        # W_K_heads = W_K.reshape(num_layers, self.d_model, num_heads, head_size).permute(
+        #     0, 2, 1, 3
+        # )
+        #
+        # i1, i2 = 21, 7
+        # print(i1, i2)
+        print(K_heads.shape)
+        self.keys_store = []
+        layers, keys, _ = K_heads.shape
+        batch_size = 100
+        steps = keys // batch_size
+        entropy_store = defaultdict(list)
+        for layer in range(layers):
+            print(f"Analyzing layer {layer}, norm {np.linalg.norm(K_heads[layer, :]):.4f}")
+            K_heads [layer, :] = K_heads[layer, :] / np.linalg.norm(K_heads[layer, :], axis=0)
+            per_layer_store = []
+            for i in range(steps):
+                tokens, values, prob_values, entropy = top_tokens(
+                    (K_heads[layer, i * batch_size : min((i + 1) * batch_size, keys)]) @ emb,
+                    tokenizer=self.tokenizer,
+                    k=10,
+                    with_extra_info=True,
+                )
+                # print(tokens.shape)
+                num_examples, _ = tokens.shape
+                for j in range(num_examples):
+
+                    t, v, p, e = tokens[j, :], values[j, :], prob_values[j, :], entropy[j]
+                    entropy_store[layer].append(e)
+                    neuron_tokens = convert_to_tokens(t, self.tokenizer)
+                    neuron_tokens = [(token, prob) for token, prob in zip(neuron_tokens, p)]
+                    per_layer_store.append((neuron_tokens, v, e))
+
+                    if e > 1.5e-4 and e < 3e-4:
+                        print(f"Analyzing layer {layer} and neuron {batch_size*i+j} with entropy {e}")
+                        print(tabulate([neuron_tokens]))
+            self.keys_store.append(per_layer_store)
+        per_layer_entropy = [(np.mean(entropy_store[i]), np.std(entropy_store[i])) for i in range(layers)]
+        per_layer_entropy = [f"{entropy[0]:.4e} {entropy[1]:.4e}" for entropy in per_layer_entropy]
+        print(per_layer_entropy)
             
 
 def main():
@@ -167,18 +177,28 @@ def main():
         "--l1-norm-penalty", type=float, default=0.0,
         help="Weight to give activation l1 norm penalty.",
     )
+    parser.add_argument(
+        "--batch-size", type=int, default=64,
+        help="Batch size for training dataset.",
+    )
     args = parser.parse_args()
     model_path = Path('./savedlms')
     learning_rates = [0.0056, 0.003, 0.0018, 0.001, 0.00056, 0.0003, 0.00018, 0.0001]
     
-    train_loader, validation_loader, tokenizer = get_tokenized_wikitext()
-
+    train_loader, validation_loader, tokenizer = get_tokenized_wikitext(args)
+    all_keys = {}
     for learning_rate in learning_rates:
         try:
             decoder = ModelDecoder(learning_rate, model_path, args, validation_loader, tokenizer)
             decoder.load_and_evaluate_model()
+            all_keys[model_path] = decoder.keys_store
         except FileNotFoundError:
             print(f"Skipping lr {learning_rate}")
+    
+    with open("savedlms/{args.act_type}_keys.pkl", "wb") as f:
+        pickle.dump(all_keys, f)
+
+    annotated_keys = {}
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from torch.distributions import Categorical
-from rebasin.transformer import Transformer
+from transparent.transformer import Transformer
 from torch.utils.data.dataloader import DataLoader
 
 device = 'cuda'
