@@ -126,11 +126,15 @@ class ModelDecoder:
         # i1, i2 = 21, 7
         # print(i1, i2)
         print(K_heads.shape)
+        print(emb.shape)
         self.keys_store = []
         layers, keys, _ = K_heads.shape
         batch_size = 100
         steps = keys // batch_size
         entropy_store = defaultdict(list)
+        # only focus on directions in embedding space rather than magnitude
+        # not sure if this is the right approach
+        emb = emb / np.linalg.norm(emb, axis=0)
         for layer in range(layers):
             print(f"Analyzing layer {layer}, norm {np.linalg.norm(K_heads[layer, :]):.4f}")
             K_heads [layer, :] = K_heads[layer, :] / np.linalg.norm(K_heads[layer, :], axis=0)
@@ -152,7 +156,7 @@ class ModelDecoder:
                     neuron_tokens = [(token, prob) for token, prob in zip(neuron_tokens, p)]
                     per_layer_store.append((neuron_tokens, v, e))
 
-                    if e > 1.5e-4 and e < 3e-4:
+                    if e < 1e-4:
                         print(f"Analyzing layer {layer} and neuron {batch_size*i+j} with entropy {e}")
                         print(tabulate([neuron_tokens]))
             self.keys_store.append(per_layer_store)

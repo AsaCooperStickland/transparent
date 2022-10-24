@@ -36,8 +36,6 @@ def top_tokens(
     # extended=True,
     # extra_values=None,
 ):
-    # if tokenizer is None:
-    #     tokenizer = my_tokenizer
     v = deepcopy(v)
     ignored_indices = []
     if only_ascii:
@@ -64,7 +62,7 @@ def top_tokens(
     # if extra_values is not None:
     #     v = torch.cat([v, extra_values])
     # print(v)
-    T = 0.1
+    T = 0.01
     probs = F.softmax(v / T, dim=-1)
     # print(probs)
     # print(probs.sum())
