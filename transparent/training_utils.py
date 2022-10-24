@@ -2,10 +2,10 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from torch.distributions import Categorical
+from rebasin.transformer import Transformer
 from torch.utils.data.dataloader import DataLoader
-from argparse import Namespace
 
-from transparent.transformer import Transformer
+device = 'cuda'
 
 
 def cross_entropy_high_precision(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
@@ -20,14 +20,13 @@ def cross_entropy_high_precision(logits: torch.Tensor, labels: torch.Tensor) -> 
     return loss
 
 
-def train_epoch(model: Transformer, train_loader: DataLoader, scheduler, optimizer, train_sparsity: list,
-                train_entropy: list, train_losses: list, args: Namespace) -> None:
-    '''Train on dataset in `train_loader` for one epoch.'''
+def train_epoch(model, train_loader, scheduler, optimizer, train_sparsity,
+                train_entropy, train_losses, args):
     for batch_idx, batch in enumerate(train_loader):
         # print(batch['input_ids'][0].shape)
         # print(batch['input_ids'][0])
         # print(tokenizer.decode(batch["input_ids"][0]))
-        data = batch['input_ids'].to(args.device)
+        data = batch['input_ids'].to(device)
         # print(data.shape)
         logits = model(data)[:, :-1]
         batch_size, sequence_length, vocab = logits.shape
@@ -68,22 +67,21 @@ def train_epoch(model: Transformer, train_loader: DataLoader, scheduler, optimiz
         else:
             pass
         train_loss.backward()
-        optimizer.step()
-        scheduler.step()
-        optimizer.zero_grad()
+        if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
 
 
-def test_epoch(model: Transformer, test_loader: DataLoader, args: Namespace, get_stats: bool=True) -> tuple:
-    '''Test on dataset in `test_loader` for one epoch. Optionally collect stats
-    about model internals.'''
+def test_epoch(model: Transformer, test_loader: DataLoader, get_stats: bool=True) -> float:
     loss_store = []
     entropy_store = []
     sparse_store = []
     for batch_idx, batch in enumerate(test_loader):
-        data = batch['input_ids'].to(args.device)
+        data = batch['input_ids'].to(device)
         logits = model(data)[:, :-1]
         batch_size, sequence_length, vocab = logits.shape
-        labels = batch['labels'].to(args.device)[:, 1:]
+        labels = batch['labels'].to(device)[:, 1:]
         logits = logits.reshape(batch_size * sequence_length, vocab)
         labels = labels.reshape(batch_size * sequence_length)
         test_loss = cross_entropy_high_precision(logits, labels).item()
@@ -95,12 +93,12 @@ def test_epoch(model: Transformer, test_loader: DataLoader, args: Namespace, get
         loss_store.append(test_loss)
     n = len(test_loader)
     if get_stats:
-        return (sum(loss_store) / n, sum(entropy_store) / n,
-                sum(sparse_store) / n)
+        return sum(loss_store) / n, sum(entropy_store) / \
+            n, sum(sparse_store) / n
     else:
-        return (sum(loss_store) / n,)
+        return sum(loss_store) / n
 
 
-def get_mean(torch_list: list) -> float:
+def get_mean(torch_list):
     torch_list = [x.item() for x in torch_list]
     return sum(torch_list) / len(torch_list)

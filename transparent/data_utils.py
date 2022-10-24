@@ -23,7 +23,7 @@ def group_texts(examples):
     return result
 
 
-def get_tokenized_wikitext():
+def get_tokenized_wikitext(args):
 
     tokenizer = AutoTokenizer.from_pretrained('bert-base-cased')
     datasets = load_dataset('wikitext', 'wikitext-103-raw-v1')
@@ -42,7 +42,7 @@ def get_tokenized_wikitext():
     tokenizer.decode(lm_datasets["train"][1]["input_ids"])
 
     train_loader = torch.utils.data.DataLoader(
-        lm_datasets["train"], batch_size=64, shuffle=True, collate_fn=default_data_collator)
+        lm_datasets["train"], batch_size=args.batch_size, shuffle=True, collate_fn=default_data_collator)
     validation_loader = torch.utils.data.DataLoader(
         lm_datasets["validation"], batch_size=32, shuffle=True, collate_fn=default_data_collator)
     return train_loader, validation_loader, tokenizer
