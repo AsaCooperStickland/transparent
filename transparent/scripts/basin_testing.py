@@ -7,10 +7,10 @@ import numpy as np
 from pathlib import Path
 from copy import deepcopy
 
-from rebasin.transformer import Transformer
-from rebasin.training_utils import test_epoch
-from rebasin.data_utils import get_tokenized_wikitext
-from rebasin.permutation_utils import nanda_transformer_permutation_spec, weight_matching, apply_permutation
+from transparent.transformer import Transformer
+from transparent.training_utils import test_epoch
+from transparent.data_utils import get_tokenized_wikitext
+from transparent.permutation_utils import nanda_transformer_permutation_spec, weight_matching, apply_permutation
 
 
 def linear_interporation(state_dict1, state_dict2, alpha=1):
