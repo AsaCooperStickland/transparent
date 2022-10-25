@@ -2,8 +2,10 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from torch.distributions import Categorical
-from transparent.transformer import Transformer
 from torch.utils.data.dataloader import DataLoader
+from typing import List
+
+from transparent.transformer import Transformer
 
 device = 'cuda'
 
@@ -73,15 +75,15 @@ def train_epoch(model, train_loader, scheduler, optimizer, train_sparsity,
             optimizer.zero_grad()
 
 
-def test_epoch(model: Transformer, test_loader: DataLoader, get_stats: bool=True) -> float:
+def test_epoch(model: Transformer, test_loader: DataLoader, args, get_stats: bool=True) -> float:
     loss_store = []
     entropy_store = []
     sparse_store = []
     for batch_idx, batch in enumerate(test_loader):
-        data = batch['input_ids'].to(device)
+        data = batch['input_ids'].to(args.device)
         logits = model(data)[:, :-1]
         batch_size, sequence_length, vocab = logits.shape
-        labels = batch['labels'].to(device)[:, 1:]
+        labels = batch['labels'].to(args.device)[:, 1:]
         logits = logits.reshape(batch_size * sequence_length, vocab)
         labels = labels.reshape(batch_size * sequence_length)
         test_loss = cross_entropy_high_precision(logits, labels).item()
@@ -97,6 +99,19 @@ def test_epoch(model: Transformer, test_loader: DataLoader, get_stats: bool=True
             n, sum(sparse_store) / n
     else:
         return sum(loss_store) / n
+
+def test_epoch_kl(models: List[Transformer], test_loader: DataLoader, args):
+    loss_store = []
+    for batch_idx, batch in enumerate(test_loader):
+        data = batch['input_ids'].to(args.device)
+        logits = [model(data)[:, :-1] for model in models]
+        batch_size, sequence_length, vocab = logits[0].shape
+        logits = [logit.reshape(batch_size * sequence_length, vocab) for logit in logits]
+        kl_loss = 0.5 * F.kl_div(logits[0], logits[1], reduction='batchmean', log_target=True)
+        kl_loss += 0.5 * F.kl_div(logits[1], logits[0], reduction='batchmean', log_target=True)
+        loss_store.append(kl_loss)
+    n = len(test_loader)
+    return sum(loss_store) / n
 
 
 def get_mean(torch_list):

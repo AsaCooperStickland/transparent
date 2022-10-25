@@ -8,8 +8,8 @@ from pathlib import Path
 from copy import deepcopy
 
 from transparent.transformer import Transformer
-from transparent.training_utils import test_epoch
-from transparent.data_utils import get_tokenized_wikitext
+from transparent.training_utils import test_epoch, test_epoch_kl
+from transparent.data_utils import get_tokenized_wikitext, get_tokenized_code
 from transparent.permutation_utils import nanda_transformer_permutation_spec, weight_matching, apply_permutation
 
 
@@ -23,7 +23,7 @@ def linear_interporation(state_dict1, state_dict2, alpha=1):
             new_dict[key] = alpha * state_dict1[key] + (1 - alpha) * state_dict2[key]
     return new_dict
     
-def linear_mode_connectivity(model, state_dict1, state_dict2, dataloader, bins=10):
+def linear_mode_connectivity(model, state_dict1, state_dict2, dataloader, args, bins=10):
 
     original_weight = deepcopy(model.state_dict())
     all_loss = []
@@ -33,9 +33,9 @@ def linear_mode_connectivity(model, state_dict1, state_dict2, dataloader, bins=1
         # print(alpha)
         new_state_dict = linear_interporation(state_dict1, state_dict2, alpha)
         model.load_state_dict(new_state_dict)
-        model.to('cuda')
+        model.to(args.device)
         model.eval()
-        test_loss = test_epoch(model, dataloader, get_stats=False)
+        test_loss = test_epoch(model, dataloader, args, get_stats=False)
         all_loss.append(test_loss)
         # print(test_loss)
         model.to('cpu')
@@ -53,8 +53,7 @@ def linear_mode_connectivity(model, state_dict1, state_dict2, dataloader, bins=1
     return top_loss - bottom_loss, all_loss
 
 
-def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, tokenizer):
-    fisher_penalty_weight = 0.0
+def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, code_loader, tokenizer):
     seed = 1234
     weight_decay = 0.0
     num_layers = 4
@@ -78,7 +77,7 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
             extra_data = pickle.load(file)
             entropy.append(extra_data[-1][-1])
             sparsity.append(extra_data[-3][-1])
-        save_dict = torch.load(drive_path / f"final.pth")
+        save_dict = torch.load(drive_path / f"final.pth", map_location=args.device)
         model_dict = save_dict["model"]
         model = Transformer(
                         num_layers=num_layers,
@@ -100,12 +99,17 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
     losses = []
     
     for i, model in enumerate(saved_models):
-        model.to('cuda')
+        model.to(args.device)
         model.eval()
-        test_loss = test_epoch(model, validation_loader, get_stats=False)
+        test_loss = test_epoch(model, validation_loader, args, get_stats=False)
         losses.append(test_loss)
         print(f"Model {i} has loss {np.log(test_loss)}")
         model.to('cpu')
+    
+    if args.test_ood:
+        code_kl_divergence = test_epoch_kl(saved_models, code_loader, args)
+    else:
+        code_kl_divergence = None
 
     model2_old = deepcopy(saved_models[1])
     model1_dict = saved_models[0].get_permutation_dict()#.keys())
@@ -114,7 +118,8 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
     
     state_dict_model2 = model2_old.state_dict()
     state_dict_model1 = saved_models[0].state_dict()
-    vanilla_gap, vanilla_losses = linear_mode_connectivity(model, state_dict_model1, state_dict_model2, validation_loader)
+    vanilla_gap, vanilla_losses = linear_mode_connectivity(model, state_dict_model1, 
+                                                           state_dict_model2, validation_loader, args)
     print(f'vanilla difference: {vanilla_gap}')
 
     for seed in range(5):
@@ -126,9 +131,9 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
             saved_models[i].insert_new_params(new_params)
     
         for i, model in enumerate(saved_models):
-            model.to('cuda')
+            model.to(args.device)
             model.eval()
-            test_loss = test_epoch(model, validation_loader, get_stats=False)
+            test_loss = test_epoch(model, validation_loader, args, get_stats=False)
             print(f"After permutation model {i} has {np.log(test_loss)}")
             model.to('cpu')
     
@@ -150,13 +155,13 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
             
         state_dict_permuted_model2 = saved_models[1].state_dict()
         gap, permuted_losses = linear_mode_connectivity(model, state_dict_model1, 
-                                                        state_dict_permuted_model2, validation_loader)
+                                                        state_dict_permuted_model2, validation_loader, args)
         all_permuted_losses.append(permuted_losses)
         all_gaps.append(gap)
         print(f'permuted difference {gap}')
         
     return all_permuted_losses, all_gaps, vanilla_losses, vanilla_gap, *losses, \
-           sum(entropy) / 2, sum(sparsity) / 2
+           sum(entropy) / 2, sum(sparsity) / 2, code_kl_divergence
 
 def main():
     parser = ArgumentParser(
@@ -167,8 +172,16 @@ def main():
         help="Use the same embedding initialization as model 0 for model 1."
     )
     parser.add_argument(
+        "--test-ood", action="store_true",
+        help="Test on code data, i.e. out of distribution."
+    )
+    parser.add_argument(
         "--act-type", type=str,
         help="Activation type for transformer",
+    )
+    parser.add_argument(
+        "--device", type=str,
+        help="Device to perform computation on (e.g. 'cuda').",
     )
     parser.add_argument(
         "--batch-size", type=int, default=64,
@@ -195,15 +208,18 @@ def main():
     model2_losses = []
     entropies = []
     sparsities = []
+    code_kls = [] 
     train_loader, validation_loader, tokenizer = get_tokenized_wikitext(args)
+    code_loader = get_tokenized_code(args, tokenizer)
     for learning_rate in learning_rates:
         try:
-            all_permuted_losses, all_gaps, vanilla_losses, vanilla_gap, model1_loss, model2_loss, entropy, sparsity =  \
-                load_and_evaluate_model(learning_rate, model_path, args, validation_loader, tokenizer)
+            all_permuted_losses, all_gaps, vanilla_losses, vanilla_gap, model1_loss, model2_loss, entropy, sparsity, code_kl =  \
+                load_and_evaluate_model(learning_rate, model_path, args, validation_loader, code_loader, tokenizer)
             permuted_gaps.append(all_gaps)
             vanilla_gaps.append(vanilla_gap)
             model1_losses.append(model1_loss)
             model2_losses.append(model2_loss)
+            code_kls.append(code_kl)
             entropies.append(entropy)
             sparsities.append(sparsity)
         except FileNotFoundError:
@@ -214,6 +230,7 @@ def main():
     print(model2_losses)
     print(entropies)
     print(sparsities)
+    print(code_kls)
 
 
 if __name__ == "__main__":
