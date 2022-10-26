@@ -108,6 +108,7 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
     
     if args.test_ood:
         code_kl_divergence = test_epoch_kl(saved_models, code_loader, args)
+        print(code_kl_divergence)
     else:
         code_kl_divergence = None
 
@@ -184,6 +185,10 @@ def main():
         help="Device to perform computation on (e.g. 'cuda').",
     )
     parser.add_argument(
+        "--model-path", type=str, default="./savedlms",
+        help="Path to saved models."
+    )
+    parser.add_argument(
         "--batch-size", type=int, default=64,
         help="Batch size for training dataset.",
     )
@@ -200,7 +205,7 @@ def main():
         help="Weight to give activation l1 norm penalty.",
     )
     args = parser.parse_args()
-    model_path = Path('./savedlms')
+    model_path = Path(args.model_path)
     learning_rates = [0.0056, 0.003, 0.0018, 0.001, 0.00056, 0.0003, 0.00018, 0.0001]
     permuted_gaps = []
     vanilla_gaps = []

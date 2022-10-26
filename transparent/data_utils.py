@@ -42,7 +42,7 @@ def get_tokenized_wikitext(args):
     train_loader = torch.utils.data.DataLoader(
         lm_datasets["train"], batch_size=args.batch_size, shuffle=True, collate_fn=default_data_collator)
     validation_loader = torch.utils.data.DataLoader(
-        lm_datasets["validation"], batch_size=32, shuffle=True, collate_fn=default_data_collator)
+        lm_datasets["validation"], batch_size=args.batch_size, shuffle=True, collate_fn=default_data_collator)
     return train_loader, validation_loader, tokenizer
     
 def get_tokenized_openwebtext(args, tokenizer):
@@ -66,7 +66,7 @@ def get_tokenized_openwebtext(args, tokenizer):
 
 def get_tokenized_code(args, tokenizer):
 
-    code_data = load_dataset("codeparrot/codeparrot-valid-v2-near-dedup", split="train")
+    code_data = load_dataset("codeparrot/codeparrot-valid-v2-near-dedup", split="train[:5%]")
     for key in code_data.features:
         if key != "content":
             code_data = code_data.remove_columns(key)
