@@ -123,25 +123,28 @@ def load_and_evaluate_model(results_store, learning_rate, model_path, args,
         print(f"Wiki ood kl {wiki_kl_divergence} and top 1 matching {wiki_top1_matching}")
         owp_kl_divergence, owp_top1_matching = test_epoch_kl(saved_models, owp_loader, args)
         print(f"Owp ood kl {owp_kl_divergence} and top 1 matching {owp_top1_matching}")
-        result_store["code_kl"] = code_kl_divergence
-        result_store["wiki_kl"] = wiki_kl_divergence
-        result_store["owp_kl"] = owp_kl_divergence
-        result_store["code_top1"] = code_top1_matching
-        result_store["wiki_top1"] = wiki_top1_matching
-        result_store["owp_top1"] = owp_top1_matching
+        results_store["code_kl"] = code_kl_divergence
+        results_store["wiki_kl"] = wiki_kl_divergence
+        results_store["owp_kl"] = owp_kl_divergence
+        results_store["code_top1"] = code_top1_matching
+        results_store["wiki_top1"] = wiki_top1_matching
+        results_store["owp_top1"] = owp_top1_matching
 
     model2_old = deepcopy(saved_models[1])
-    model1_dict = saved_models[0].get_permutation_dict()
-    model2_dict = saved_models[1].get_permutation_dict()
-    permutation_spec = nanda_transformer_permutation_spec(args.act_type)
-    
     state_dict_model2 = model2_old.state_dict()
     state_dict_model1 = saved_models[0].state_dict()
     vanilla_gap, vanilla_losses = linear_mode_connectivity(model, state_dict_model1, 
                                                            state_dict_model2, validation_loader, args)
     print(f'vanilla difference: {vanilla_gap}')
     if args.skip_permutation_testing:
-        return 
+        return
+    if 'stanford' in args.pretrained_model:
+        raise NotImplementedError
+    # permutation testing
+    model1_dict = saved_models[0].get_permutation_dict()
+    model2_dict = saved_models[1].get_permutation_dict()
+    permutation_spec = nanda_transformer_permutation_spec(args.act_type)
+
     for seed in range(5):
         final_permutation = weight_matching(seed, permutation_spec,
                                         model1_dict, model2_dict, max_iter=100)
@@ -158,19 +161,6 @@ def load_and_evaluate_model(results_store, learning_rate, model_path, args,
             model.to('cpu')
     
         # Linear mode connectivity
-            
-        model = Transformer(
-            num_layers=num_layers,
-            d_vocab=d_vocab,
-            d_model=d_model,
-            d_mlp=d_mlp,
-            d_head=d_head,
-            num_heads=num_heads,
-            n_ctx=n_ctx,
-            act_type=act_type,
-            use_cache=True,
-            use_ln=use_ln,
-                                )
             
         state_dict_permuted_model2 = saved_models[1].state_dict()
         gap, permuted_losses = linear_mode_connectivity(model, state_dict_model1, 
@@ -231,11 +221,12 @@ def main():
     )
     args = parser.parse_args()
     model_path = Path(args.model_path)
-    results = {}
 
     if 'stanford' in args.pretrained_model:
+        results = defaultdict(list)
         tokenizer = AutoTokenizer.from_pretrained('stanford-crfm/alias-gpt2-small-x21')
     else:
+        results = {}
         tokenizer = AutoTokenizer.from_pretrained('bert-base-cased')
     train_loader, validation_loader = get_tokenized_wikitext(args, tokenizer)
     code_loader = get_tokenized_code(args, tokenizer)
