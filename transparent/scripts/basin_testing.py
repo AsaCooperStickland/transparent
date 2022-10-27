@@ -9,7 +9,7 @@ from copy import deepcopy
 
 from transparent.transformer import Transformer
 from transparent.training_utils import test_epoch, test_epoch_kl
-from transparent.data_utils import get_tokenized_wikitext, get_tokenized_code
+from transparent.data_utils import get_tokenized_wikitext, get_tokenized_code, get_tokenized_openwebtext
 from transparent.permutation_utils import nanda_transformer_permutation_spec, weight_matching, apply_permutation
 
 
@@ -53,7 +53,7 @@ def linear_mode_connectivity(model, state_dict1, state_dict2, dataloader, args, 
     return top_loss - bottom_loss, all_loss
 
 
-def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, code_loader, tokenizer):
+def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, code_loader, owp_loader, tokenizer):
     seed = 1234
     weight_decay = 0.0
     num_layers = 4
@@ -107,8 +107,10 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
         model.to('cpu')
     
     if args.test_ood:
-        code_kl_divergence = test_epoch_kl(saved_models, code_loader, args)
-        print(code_kl_divergence)
+        code_kl_divergence, code_top1_matching = test_epoch_kl(saved_models, code_loader, args)
+        print(code_kl_divergence, code_top1_matching)
+        owp_kl_divergence, owp_top1_matching = test_epoch_kl(saved_models, owp_loader, args)
+        print(owp_kl_divergence, owp_top1_matching)
     else:
         code_kl_divergence = None
 
@@ -122,7 +124,9 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
     vanilla_gap, vanilla_losses = linear_mode_connectivity(model, state_dict_model1, 
                                                            state_dict_model2, validation_loader, args)
     print(f'vanilla difference: {vanilla_gap}')
-
+    if args.skip_permutation_testing:
+        return all_permuted_losses, all_gaps, vanilla_losses, vanilla_gap, *losses, \
+               sum(entropy) / 2, sum(sparsity) / 2, code_kl_divergence
     for seed in range(5):
         final_permutation = weight_matching(seed, permutation_spec,
                                         model1_dict, model2_dict, max_iter=100)
@@ -177,6 +181,10 @@ def main():
         help="Test on code data, i.e. out of distribution."
     )
     parser.add_argument(
+        "--skip-permutation-testing", action="store_true",
+        help="Don't test linear mode connectivity after permuting."
+    )
+    parser.add_argument(
         "--act-type", type=str,
         help="Activation type for transformer",
     )
@@ -216,10 +224,12 @@ def main():
     code_kls = [] 
     train_loader, validation_loader, tokenizer = get_tokenized_wikitext(args)
     code_loader = get_tokenized_code(args, tokenizer)
+    owp_loader = get_tokenized_openwebtext(args, tokenizer)
     for learning_rate in learning_rates:
         try:
             all_permuted_losses, all_gaps, vanilla_losses, vanilla_gap, model1_loss, model2_loss, entropy, sparsity, code_kl =  \
-                load_and_evaluate_model(learning_rate, model_path, args, validation_loader, code_loader, tokenizer)
+                load_and_evaluate_model(learning_rate, model_path, args, validation_loader, code_loader,
+                owp_loader, tokenizer)
             permuted_gaps.append(all_gaps)
             vanilla_gaps.append(vanilla_gap)
             model1_losses.append(model1_loss)

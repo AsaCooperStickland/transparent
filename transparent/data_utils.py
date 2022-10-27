@@ -47,7 +47,7 @@ def get_tokenized_wikitext(args):
     
 def get_tokenized_openwebtext(args, tokenizer):
 
-    datasets = load_dataset('stas/openwebtext-10k', split='train')
+    datasets = load_dataset('stas/openwebtext-10k', split='train[:10%]')
 
     def tokenize_function(examples):
         return tokenizer(examples["text"], max_length=512, truncation=True)
@@ -66,7 +66,7 @@ def get_tokenized_openwebtext(args, tokenizer):
 
 def get_tokenized_code(args, tokenizer):
 
-    code_data = load_dataset("codeparrot/codeparrot-valid-v2-near-dedup", split="train[:5%]")
+    code_data = load_dataset("codeparrot/codeparrot-valid-v2-near-dedup", split="train[:1%]")
     for key in code_data.features:
         if key != "content":
             code_data = code_data.remove_columns(key)

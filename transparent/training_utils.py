@@ -102,6 +102,8 @@ def test_epoch(model: Transformer, test_loader: DataLoader, args, get_stats: boo
 
 def test_epoch_kl(models: List[Transformer], test_loader: DataLoader, args):
     loss_store = []
+    matching_predictions = 0.0
+    total = 0
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
             data = batch['input_ids'].to(args.device)
@@ -110,9 +112,12 @@ def test_epoch_kl(models: List[Transformer], test_loader: DataLoader, args):
             logits = [logit.reshape(batch_size * sequence_length, vocab) for logit in logits]
             kl_loss = 0.5 * F.kl_div(logits[0], logits[1], reduction='batchmean', log_target=True)
             kl_loss += 0.5 * F.kl_div(logits[1], logits[0], reduction='batchmean', log_target=True)
+            predictions = [logit.argmax(dim=-1) for logit in logits]
+            matching_predictions += (predictions[0] == predictions[1]).sum().item()
+            total += batch_size * sequence_length
             loss_store.append(kl_loss.item())
     n = len(test_loader)
-    return sum(loss_store) / n
+    return sum(loss_store) / n, matching_predictions / total
 
 
 def get_mean(torch_list):
