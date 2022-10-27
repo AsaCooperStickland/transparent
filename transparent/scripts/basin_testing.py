@@ -1,11 +1,16 @@
-"""## Permuting trained language models"""
+""" Permuting trained language models"""
 import os
+import json
 import torch
 import pickle
 from argparse import ArgumentParser
 import numpy as np
 from pathlib import Path
 from copy import deepcopy
+from collections import defaultdict
+from transformers import AutoTokenizer
+
+from easy_transformer import EasyTransformer
 
 from transparent.transformer import Transformer
 from transparent.training_utils import test_epoch, test_epoch_kl
@@ -52,31 +57,30 @@ def linear_mode_connectivity(model, state_dict1, state_dict2, dataloader, args, 
     
     return top_loss - bottom_loss, all_loss
 
-
-def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, code_loader, owp_loader, tokenizer):
-    seed = 1234
-    weight_decay = 0.0
-    num_layers = 4
-    d_vocab = len(tokenizer)
-    d_model = 256
-    d_mlp = 1024
-    num_heads = 4
-    d_head = 64
-    n_ctx = 128
-    act2act = {'solu': 'SoLU', 'gelu': 'GeLU', 'relu': 'ReLU'}
-    act_type = act2act[args.act_type]
-    use_ln = False
-    saved_models = []
-    entropy = []
-    sparsity = []
-    for run_id in range(2):
-        drive_path = model_path / f'lm_l1pen_{args.l1_norm_penalty}_fpen{args.fisher_penalty_weight}_{args.act_type}_seed{seed}_lr_{learning_rate}_wd_{weight_decay}_{run_id}'
+def get_model(args, model_path, tokenizer, run_id, results_store):
+    if 'stanford' in args.pretrained_model:
+        model = EasyTransformer.from_pretrained(f'{args.pretrained_model}-{run_id}')
+    else:
+        seed = 1234
+        weight_decay = 0.0
+        num_layers = 4
+        d_vocab = len(tokenizer)
+        d_model = 256
+        d_mlp = 1024
+        num_heads = 4
+        d_head = 64
+        n_ctx = 128
+        act2act = {'solu': 'SoLU', 'gelu': 'GeLU', 'relu': 'ReLU'}
+        act_type = act2act[args.act_type]
+        use_ln = False
+        drive_path = model_path / (f'lm_l1pen_{args.l1_norm_penalty}_fpen{args.fisher_penalty_weight}' +
+                                   f'_{args.act_type}_seed{seed}_lr_{learning_rate}_wd_{weight_decay}_{run_id}')
         if run_id == 1 and args.share_embeddings:
             drive_path = drive_path / "model0embeds"
         with open(drive_path / "data.pkl", "rb") as file:
             extra_data = pickle.load(file)
-            entropy.append(extra_data[-1][-1])
-            sparsity.append(extra_data[-3][-1])
+            results_store["entropy"].append(extra_data[-1][-1])
+            results_store["sparsity"].append(extra_data[-3][-1])
         save_dict = torch.load(drive_path / f"final.pth", map_location=args.device)
         model_dict = save_dict["model"]
         model = Transformer(
@@ -90,33 +94,45 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
                         act_type=act_type,
                         use_cache=True,
                         use_ln=use_ln,
-                        )
+                    )
         model.load_state_dict(model_dict)
+    return model
+
+def load_and_evaluate_model(results_store, learning_rate, model_path, args, 
+                            validation_loader, code_loader, owp_loader, tokenizer):
+    
+    saved_models = []
+
+    model_ids = ['A', 'B'] if 'stanford' in args.pretrained_model else range(2)
+    for run_id in model_ids:
+        model = get_model(args, model_path, tokenizer, run_id, results_store)
         saved_models.append(model)
 
-    all_gaps = []
-    all_permuted_losses = []
-    losses = []
-    
     for i, model in enumerate(saved_models):
         model.to(args.device)
         model.eval()
         test_loss = test_epoch(model, validation_loader, args, get_stats=False)
-        losses.append(test_loss)
-        print(f"Model {i} has loss {np.log(test_loss)}")
+        results_store['losses'].append(test_loss)
+        print(f"Model {i} has loss {test_loss}")
         model.to('cpu')
     
     if args.test_ood:
         code_kl_divergence, code_top1_matching = test_epoch_kl(saved_models, code_loader, args)
-        print(code_kl_divergence, code_top1_matching)
+        print(f"Code ood kl {code_kl_divergence} and top 1 matching {code_top1_matching}")
+        wiki_kl_divergence, wiki_top1_matching = test_epoch_kl(saved_models, validation_loader, args)
+        print(f"Wiki ood kl {wiki_kl_divergence} and top 1 matching {wiki_top1_matching}")
         owp_kl_divergence, owp_top1_matching = test_epoch_kl(saved_models, owp_loader, args)
-        print(owp_kl_divergence, owp_top1_matching)
-    else:
-        code_kl_divergence = None
+        print(f"Owp ood kl {owp_kl_divergence} and top 1 matching {owp_top1_matching}")
+        result_store["code_kl"] = code_kl_divergence
+        result_store["wiki_kl"] = wiki_kl_divergence
+        result_store["owp_kl"] = owp_kl_divergence
+        result_store["code_top1"] = code_top1_matching
+        result_store["wiki_top1"] = wiki_top1_matching
+        result_store["owp_top1"] = owp_top1_matching
 
     model2_old = deepcopy(saved_models[1])
-    model1_dict = saved_models[0].get_permutation_dict()#.keys())
-    model2_dict = saved_models[1].get_permutation_dict()#.keys())
+    model1_dict = saved_models[0].get_permutation_dict()
+    model2_dict = saved_models[1].get_permutation_dict()
     permutation_spec = nanda_transformer_permutation_spec(args.act_type)
     
     state_dict_model2 = model2_old.state_dict()
@@ -125,8 +141,7 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
                                                            state_dict_model2, validation_loader, args)
     print(f'vanilla difference: {vanilla_gap}')
     if args.skip_permutation_testing:
-        return all_permuted_losses, all_gaps, vanilla_losses, vanilla_gap, *losses, \
-               sum(entropy) / 2, sum(sparsity) / 2, code_kl_divergence
+        return 
     for seed in range(5):
         final_permutation = weight_matching(seed, permutation_spec,
                                         model1_dict, model2_dict, max_iter=100)
@@ -139,11 +154,10 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
             model.to(args.device)
             model.eval()
             test_loss = test_epoch(model, validation_loader, args, get_stats=False)
-            print(f"After permutation model {i} has {np.log(test_loss)}")
+            print(f"After permutation model {i} has {test_loss}")
             model.to('cpu')
     
-        """## Linear mode connectivity"""
-    
+        # Linear mode connectivity
             
         model = Transformer(
             num_layers=num_layers,
@@ -161,12 +175,11 @@ def load_and_evaluate_model(learning_rate, model_path, args, validation_loader, 
         state_dict_permuted_model2 = saved_models[1].state_dict()
         gap, permuted_losses = linear_mode_connectivity(model, state_dict_model1, 
                                                         state_dict_permuted_model2, validation_loader, args)
-        all_permuted_losses.append(permuted_losses)
-        all_gaps.append(gap)
-        print(f'permuted difference {gap}')
+        results_store['permuted_losses'].append(permuted_losses)
+        results_store['gap'].append(gap)
+        print(f'Permuted difference {gap}')
         
-    return all_permuted_losses, all_gaps, vanilla_losses, vanilla_gap, *losses, \
-           sum(entropy) / 2, sum(sparsity) / 2, code_kl_divergence
+    return 
 
 def main():
     parser = ArgumentParser(
@@ -175,6 +188,10 @@ def main():
     parser.add_argument(
         "--share-embeddings", action="store_true",
         help="Use the same embedding initialization as model 0 for model 1."
+    )
+    parser.add_argument(
+        "--pretrained-model", type=str, default="none",
+        help="Use the pre-trained mistral models."
     )
     parser.add_argument(
         "--test-ood", action="store_true",
@@ -214,38 +231,41 @@ def main():
     )
     args = parser.parse_args()
     model_path = Path(args.model_path)
-    learning_rates = [0.0056, 0.003, 0.0018, 0.001, 0.00056, 0.0003, 0.00018, 0.0001]
-    permuted_gaps = []
-    vanilla_gaps = []
-    model1_losses = []
-    model2_losses = []
-    entropies = []
-    sparsities = []
-    code_kls = [] 
-    train_loader, validation_loader, tokenizer = get_tokenized_wikitext(args)
+    results = {}
+
+    if 'stanford' in args.pretrained_model:
+        tokenizer = AutoTokenizer.from_pretrained('stanford-crfm/alias-gpt2-small-x21')
+    else:
+        tokenizer = AutoTokenizer.from_pretrained('bert-base-cased')
+    train_loader, validation_loader = get_tokenized_wikitext(args, tokenizer)
     code_loader = get_tokenized_code(args, tokenizer)
     owp_loader = get_tokenized_openwebtext(args, tokenizer)
-    for learning_rate in learning_rates:
+
+    if 'stanford' in args.pretrained_model:
+        results_path = model_path / 'results' / args.pretrained_model
+        load_and_evaluate_model(results, -1, model_path, args, validation_loader, code_loader,
+                                owp_loader, tokenizer)
+    else:
+        learning_rates = [0.0056, 0.003, 0.0018, 0.001, 0.00056, 0.0003, 0.00018, 0.0001]
+        results_path = model_path / 'results' / (f'l1pen_{args.l1_norm_penalty}_fpen{args.fisher_penalty_weight}_' +
+                                     f'{args.act_type}_seed1234_wd_0.0')
         try:
-            all_permuted_losses, all_gaps, vanilla_losses, vanilla_gap, model1_loss, model2_loss, entropy, sparsity, code_kl =  \
-                load_and_evaluate_model(learning_rate, model_path, args, validation_loader, code_loader,
-                owp_loader, tokenizer)
-            permuted_gaps.append(all_gaps)
-            vanilla_gaps.append(vanilla_gap)
-            model1_losses.append(model1_loss)
-            model2_losses.append(model2_loss)
-            code_kls.append(code_kl)
-            entropies.append(entropy)
-            sparsities.append(sparsity)
-        except FileNotFoundError:
-            print(f"Skipping lr {learning_rate}")
-    print(vanilla_gaps)
-    print(permuted_gaps)
-    print(model1_losses)
-    print(model2_losses)
-    print(entropies)
-    print(sparsities)
-    print(code_kls)
+            os.makedirs(results_path)
+        except FileExistsError:
+            print(f'{results_path} exists already.')
+    
+        for learning_rate in learning_rates:
+            try:
+                results[learning_rate] = defaultdict(list)
+                load_and_evaluate_model(results[learning_rate], learning_rate, model_path, args, validation_loader, code_loader,
+                                        owp_loader, tokenizer)
+            except FileNotFoundError:
+                print(f"Skipping lr {learning_rate}")
+        
+        print(results)
+        with open(results_path / 'results.json', 'w') as f:
+            json.dump(results, f)
+        
 
 
 if __name__ == "__main__":

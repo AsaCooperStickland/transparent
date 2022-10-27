@@ -1,5 +1,4 @@
 from transformers.data import default_data_collator
-from transformers import AutoTokenizer
 import torch
 from datasets import load_dataset
 
@@ -22,10 +21,8 @@ def group_texts(examples):
     result["labels"] = result["input_ids"].copy()
     return result
 
+def get_tokenized_wikitext(args, tokenizer):
 
-def get_tokenized_wikitext(args):
-
-    tokenizer = AutoTokenizer.from_pretrained('bert-base-cased')
     datasets = load_dataset('wikitext', 'wikitext-103-raw-v1')
 
     def tokenize_function(examples):
@@ -43,7 +40,7 @@ def get_tokenized_wikitext(args):
         lm_datasets["train"], batch_size=args.batch_size, shuffle=True, collate_fn=default_data_collator)
     validation_loader = torch.utils.data.DataLoader(
         lm_datasets["validation"], batch_size=args.batch_size, shuffle=True, collate_fn=default_data_collator)
-    return train_loader, validation_loader, tokenizer
+    return train_loader, validation_loader
     
 def get_tokenized_openwebtext(args, tokenizer):
 

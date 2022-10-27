@@ -53,7 +53,8 @@ def main():
     args = parser.parse_args()
 
     # Transformer hyper-params
-    train_loader, validation_loader, tokenizer = get_tokenized_wikitext()
+    tokenizer = AutoTokenizer.from_pretrained('bert-base-cased')
+    train_loader, validation_loader = get_tokenized_wikitext(args)
 
     act2act = {'solu': 'SoLU', 'gelu': 'GeLU', 'relu': 'ReLU'}
     act_device = act2act[args.act_type]
@@ -143,7 +144,7 @@ def main():
                         train_epoch(model, train_loader, scheduler, optimizer, train_sparsity, 
                                     train_entropy, train_losses, args)
                         model.eval()
-                        test_loss, entropy, sparsity = test_epoch(model, validation_loader)
+                        test_loss, entropy, sparsity = test_epoch(model, validation_loader, args)
                         test_losses.append(test_loss)
                         test_entropy.append(entropy)
                         test_sparsity.append(sparsity)
