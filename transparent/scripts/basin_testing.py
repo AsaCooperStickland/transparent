@@ -8,6 +8,7 @@ import numpy as np
 from pathlib import Path
 from copy import deepcopy
 from collections import defaultdict
+from itertools import combinations
 from transformers import AutoTokenizer
 
 from easy_transformer import EasyTransformer
@@ -16,7 +17,6 @@ from transparent.transformer import Transformer
 from transparent.training_utils import test_epoch, test_epoch_kl
 from transparent.data_utils import get_tokenized_wikitext, get_tokenized_code, get_tokenized_openwebtext
 from transparent.permutation_utils import nanda_transformer_permutation_spec, weight_matching, apply_permutation
-
 
 def linear_interporation(state_dict1, state_dict2, alpha=1):
 
@@ -58,6 +58,7 @@ def linear_mode_connectivity(model, state_dict1, state_dict2, dataloader, args, 
     return top_loss - bottom_loss, all_loss
 
 def get_model(args, model_path, tokenizer, run_id, results_store):
+    # TODO: inefficient to load models every time, cache them somehow?
     if 'stanford' in args.pretrained_model:
         model = EasyTransformer.from_pretrained(f'{args.pretrained_model}-{run_id}')
     else:
@@ -98,77 +99,88 @@ def get_model(args, model_path, tokenizer, run_id, results_store):
         model.load_state_dict(model_dict)
     return model
 
-def load_and_evaluate_model(results_store, learning_rate, model_path, args, 
+def load_and_evaluate_model(results, learning_rate, model_path, args, 
                             validation_loader, code_loader, owp_loader, tokenizer):
     
-    saved_models = []
-
-    model_ids = ['A', 'B'] if 'stanford' in args.pretrained_model else range(2)
-    for run_id in model_ids:
-        model = get_model(args, model_path, tokenizer, run_id, results_store)
-        saved_models.append(model)
-
-    for i, model in enumerate(saved_models):
-        model.to(args.device)
-        model.eval()
-        test_loss = test_epoch(model, validation_loader, args, get_stats=False)
-        results_store['losses'].append(test_loss)
-        print(f"Model {i} has loss {test_loss}")
-        model.to('cpu')
+    cached_result = {}
+    model_ids = ['A', 'B', 'C', 'D', 'E'] if 'stanford' in args.pretrained_model else range(2)
+    for run_pair in combinations(model_ids, 2):
+        results_store = defaultdict(list)
+        key = f'{run_pair[0]}-{run_pair[1]}'
+        results[key] = results_store
+        saved_models = []
+        for run_id in run_pair:
+            model = get_model(args, model_path, tokenizer, run_id, results_store)
+            saved_models.append(model)
     
-    if args.test_ood:
-        code_kl_divergence, code_top1_matching = test_epoch_kl(saved_models, code_loader, args)
-        print(f"Code ood kl {code_kl_divergence} and top 1 matching {code_top1_matching}")
-        wiki_kl_divergence, wiki_top1_matching = test_epoch_kl(saved_models, validation_loader, args)
-        print(f"Wiki ood kl {wiki_kl_divergence} and top 1 matching {wiki_top1_matching}")
-        owp_kl_divergence, owp_top1_matching = test_epoch_kl(saved_models, owp_loader, args)
-        print(f"Owp ood kl {owp_kl_divergence} and top 1 matching {owp_top1_matching}")
-        results_store["code_kl"] = code_kl_divergence
-        results_store["wiki_kl"] = wiki_kl_divergence
-        results_store["owp_kl"] = owp_kl_divergence
-        results_store["code_top1"] = code_top1_matching
-        results_store["wiki_top1"] = wiki_top1_matching
-        results_store["owp_top1"] = owp_top1_matching
-
-    model2_old = deepcopy(saved_models[1])
-    state_dict_model2 = model2_old.state_dict()
-    state_dict_model1 = saved_models[0].state_dict()
-    vanilla_gap, vanilla_losses = linear_mode_connectivity(model, state_dict_model1, 
-                                                           state_dict_model2, validation_loader, args)
-    print(f'vanilla difference: {vanilla_gap}')
-    if args.skip_permutation_testing:
-        return
-    if 'stanford' in args.pretrained_model:
-        raise NotImplementedError
-    # permutation testing
-    model1_dict = saved_models[0].get_permutation_dict()
-    model2_dict = saved_models[1].get_permutation_dict()
-    permutation_spec = nanda_transformer_permutation_spec(args.act_type)
-
-    for seed in range(5):
-        final_permutation = weight_matching(seed, permutation_spec,
-                                        model1_dict, model2_dict, max_iter=100)
-        model2_dict_new = apply_permutation(permutation_spec, final_permutation, model2_dict)
-    
-        for i, new_params in enumerate([model1_dict, model2_dict_new]):
-            saved_models[i].insert_new_params(new_params)
-    
-        for i, model in enumerate(saved_models):
+        for model_id, model in zip(run_pair, saved_models):
             model.to(args.device)
             model.eval()
-            test_loss = test_epoch(model, validation_loader, args, get_stats=False)
-            print(f"After permutation model {i} has {test_loss}")
+            if model_id in cached_result:
+                test_loss = cached_result[model_id]
+            else:
+                test_loss = test_epoch(model, validation_loader, args, get_stats=False)
+                cached_result[model_id] = test_loss
+            results_store['losses'].append(test_loss)
+            print(f"Model {model_id} has loss {test_loss}")
+            #model.to('cpu')
+        
+        if args.test_ood:
+            code_kl_divergence, code_top1_matching = test_epoch_kl(saved_models, code_loader, args)
+            print(f"Code ood kl {code_kl_divergence} and top 1 matching {code_top1_matching}")
+            wiki_kl_divergence, wiki_top1_matching = test_epoch_kl(saved_models, validation_loader, args)
+            print(f"Wiki ood kl {wiki_kl_divergence} and top 1 matching {wiki_top1_matching}")
+            owp_kl_divergence, owp_top1_matching = test_epoch_kl(saved_models, owp_loader, args)
+            print(f"Owp ood kl {owp_kl_divergence} and top 1 matching {owp_top1_matching}")
+            results_store["code_kl"] = code_kl_divergence
+            results_store["wiki_kl"] = wiki_kl_divergence
+            results_store["owp_kl"] = owp_kl_divergence
+            results_store["code_top1"] = code_top1_matching
+            results_store["wiki_top1"] = wiki_top1_matching
+            results_store["owp_top1"] = owp_top1_matching
+        
+        for model in saved_models:
             model.to('cpu')
     
-        # Linear mode connectivity
-            
-        state_dict_permuted_model2 = saved_models[1].state_dict()
-        gap, permuted_losses = linear_mode_connectivity(model, state_dict_model1, 
-                                                        state_dict_permuted_model2, validation_loader, args)
-        results_store['permuted_losses'].append(permuted_losses)
-        results_store['gap'].append(gap)
-        print(f'Permuted difference {gap}')
+        model2_old = deepcopy(saved_models[1])
+        state_dict_model2 = model2_old.state_dict()
+        state_dict_model1 = saved_models[0].state_dict()
+        vanilla_gap, vanilla_losses = linear_mode_connectivity(model, state_dict_model1, 
+                                                               state_dict_model2, validation_loader, args)
+        print(f'vanilla difference: {vanilla_gap}')
+        if args.skip_permutation_testing:
+            continue
+        if 'stanford' in args.pretrained_model:
+            raise NotImplementedError
+        # permutation testing
+        model1_dict = saved_models[0].get_permutation_dict()
+        model2_dict = saved_models[1].get_permutation_dict()
+        permutation_spec = nanda_transformer_permutation_spec(args.act_type)
+    
+        for seed in range(5):
+            final_permutation = weight_matching(seed, permutation_spec,
+                                            model1_dict, model2_dict, max_iter=100)
+            model2_dict_new = apply_permutation(permutation_spec, final_permutation, model2_dict)
         
+            for i, new_params in enumerate([model1_dict, model2_dict_new]):
+                saved_models[i].insert_new_params(new_params)
+        
+            for i, model in enumerate(saved_models):
+                model.to(args.device)
+                model.eval()
+                test_loss = test_epoch(model, validation_loader, args, get_stats=False)
+                print(f"After permutation model {i} has {test_loss}")
+                model.to('cpu')
+        
+            # Linear mode connectivity
+                
+            state_dict_permuted_model2 = saved_models[1].state_dict()
+            gap, permuted_losses = linear_mode_connectivity(model, state_dict_model1, 
+                                                            state_dict_permuted_model2, validation_loader, args)
+            results_store['permuted_losses'].append(permuted_losses)
+            results_store['gap'].append(gap)
+            print(f'Permuted difference {gap}')
+            
     return 
 
 def main():
@@ -223,11 +235,10 @@ def main():
     model_path = Path(args.model_path)
 
     if 'stanford' in args.pretrained_model:
-        results = defaultdict(list)
         tokenizer = AutoTokenizer.from_pretrained('stanford-crfm/alias-gpt2-small-x21')
     else:
-        results = {}
         tokenizer = AutoTokenizer.from_pretrained('bert-base-cased')
+    results = {}
     train_loader, validation_loader = get_tokenized_wikitext(args, tokenizer)
     code_loader = get_tokenized_code(args, tokenizer)
     owp_loader = get_tokenized_openwebtext(args, tokenizer)
@@ -247,7 +258,7 @@ def main():
     
         for learning_rate in learning_rates:
             try:
-                results[learning_rate] = defaultdict(list)
+                results[learning_rate] = {}
                 load_and_evaluate_model(results[learning_rate], learning_rate, model_path, args, validation_loader, code_loader,
                                         owp_loader, tokenizer)
             except FileNotFoundError:

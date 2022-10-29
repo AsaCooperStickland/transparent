@@ -86,7 +86,7 @@ def test_epoch(model: Transformer, test_loader: DataLoader, args, get_stats: boo
         labels = batch['labels'].to(args.device)[:, 1:]
         logits = logits.reshape(batch_size * sequence_length, vocab)
         labels = labels.reshape(batch_size * sequence_length)
-        test_loss = cross_entropy_high_precision(logits, labels).item()
+        test_loss = F.cross_entropy(logits, labels).item()
         if get_stats:
             sparsity = get_mean(model.get_sparsity())
             sparse_store.append(sparsity)
